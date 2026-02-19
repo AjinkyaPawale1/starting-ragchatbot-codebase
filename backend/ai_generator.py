@@ -4,21 +4,27 @@ from typing import List, Optional, Dict, Any
 class AIGenerator:
     """Handles interactions with Anthropic's Claude API for generating responses"""
     
+    MAX_TOOL_ROUNDS = 2
+
     # Static system prompt to avoid rebuilding on each call
     SYSTEM_PROMPT = """ You are an AI assistant specialized in course materials and educational content with access to a comprehensive search tool for course information.
 
-Search Tool Usage:
-- Use the search tool **only** for questions about specific course content or detailed educational materials
-- **One search per query maximum**
-- Synthesize search results into accurate, fact-based responses
-- If search yields no results, state this clearly without offering alternatives
+Tool Usage:
+- Use the **search_course_content** tool for questions about specific course content or detailed educational materials
+- Use the **get_course_outline** tool for questions about course structure, syllabus, outline, or lesson listings
+  - When presenting outline results, always include: the course title, the course link, and for each lesson its number and title
+- You may use up to 2 sequential tool calls per query when needed (e.g., first get an outline, then search based on results)
+- Most questions require only one tool call
+- Synthesize tool results into accurate, fact-based responses
+- If a tool yields no results, state this clearly without offering alternatives
 
 Response Protocol:
 - **General knowledge questions**: Answer using existing knowledge without searching
-- **Course-specific questions**: Search first, then answer
+- **Course outline/structure questions**: Use get_course_outline, then present the full outline with course title, course link, and all lessons
+- **Course content questions**: Use search_course_content, then answer
 - **No meta-commentary**:
  - Provide direct answers only — no reasoning process, search explanations, or question-type analysis
- - Do not mention "based on the search results"
+ - Do not mention "based on the search results" or "based on the tool results"
 
 
 All responses must be:
@@ -88,48 +94,62 @@ Provide only the direct answer to what was asked.
     
     def _handle_tool_execution(self, initial_response, base_params: Dict[str, Any], tool_manager):
         """
-        Handle execution of tool calls and get follow-up response.
-        
+        Handle sequential tool calls (up to MAX_TOOL_ROUNDS) and return final text.
+
         Args:
-            initial_response: The response containing tool use requests
-            base_params: Base API parameters
+            initial_response: The first response containing tool use requests
+            base_params: API parameters from generate_response (includes messages/system)
             tool_manager: Manager to execute tools
-            
+
         Returns:
-            Final response text after tool execution
+            Final response text after all tool rounds complete
         """
-        # Start with existing messages
         messages = base_params["messages"].copy()
-        
-        # Add AI's tool use response
-        messages.append({"role": "assistant", "content": initial_response.content})
-        
-        # Execute all tool calls and collect results
-        tool_results = []
-        for content_block in initial_response.content:
-            if content_block.type == "tool_use":
-                tool_result = tool_manager.execute_tool(
-                    content_block.name, 
-                    **content_block.input
-                )
-                
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": content_block.id,
-                    "content": tool_result
-                })
-        
-        # Add tool results as single message
-        if tool_results:
-            messages.append({"role": "user", "content": tool_results})
-        
-        # Prepare final API call without tools
-        final_params = {
-            **self.base_params,
-            "messages": messages,
-            "system": base_params["system"]
-        }
-        
-        # Get final response
-        final_response = self.client.messages.create(**final_params)
-        return final_response.content[0].text
+        current_response = initial_response
+        tools = base_params.get("tools")
+        system = base_params["system"]
+
+        for round_count in range(self.MAX_TOOL_ROUNDS):
+            # Append the assistant's tool_use response
+            messages.append({"role": "assistant", "content": current_response.content})
+
+            # Execute all tool calls in the current response
+            tool_results = []
+            for content_block in current_response.content:
+                if content_block.type == "tool_use":
+                    try:
+                        tool_result = tool_manager.execute_tool(
+                            content_block.name,
+                            **content_block.input
+                        )
+                    except Exception as e:
+                        tool_result = f"Tool execution error: {e}"
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": content_block.id,
+                        "content": tool_result
+                    })
+
+            # Append tool results as user message
+            if tool_results:
+                messages.append({"role": "user", "content": tool_results})
+
+            # Include tools in intermediate rounds, omit on final round
+            is_final_round = (round_count + 1) >= self.MAX_TOOL_ROUNDS
+            next_params = {
+                **self.base_params,
+                "messages": messages,
+                "system": system,
+            }
+            if not is_final_round and tools:
+                next_params["tools"] = tools
+                next_params["tool_choice"] = {"type": "auto"}
+
+            current_response = self.client.messages.create(**next_params)
+
+            # Exit early if Claude didn't request more tools
+            if current_response.stop_reason != "tool_use":
+                break
+
+        return current_response.content[0].text

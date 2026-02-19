@@ -89,29 +89,101 @@ class CourseSearchTool(Tool):
         """Format search results with course and lesson context"""
         formatted = []
         sources = []  # Track sources for the UI
-        
+
         for doc, meta in zip(results.documents, results.metadata):
             course_title = meta.get('course_title', 'unknown')
             lesson_num = meta.get('lesson_number')
-            
+
             # Build context header
             header = f"[{course_title}"
             if lesson_num is not None:
                 header += f" - Lesson {lesson_num}"
             header += "]"
-            
-            # Track source for the UI
-            source = course_title
+
+            # Track source with link for the UI
+            label = course_title
+            link = None
             if lesson_num is not None:
-                source += f" - Lesson {lesson_num}"
-            sources.append(source)
-            
+                label += f" - Lesson {lesson_num}"
+                link = self.store.get_lesson_link(course_title, lesson_num)
+            sources.append({"label": label, "link": link})
+
             formatted.append(f"{header}\n{doc}")
-        
+
         # Store sources for retrieval
         self.last_sources = sources
-        
+
         return "\n\n".join(formatted)
+
+class CourseOutlineTool(Tool):
+    """Tool for retrieving course outline with title, link, and lesson list"""
+
+    def __init__(self, vector_store: VectorStore):
+        self.store = vector_store
+
+    def get_tool_definition(self) -> Dict[str, Any]:
+        """Return Anthropic tool definition for this tool"""
+        return {
+            "name": "get_course_outline",
+            "description": "Retrieve the full outline of a course including its title, course link, and complete list of lessons with their numbers and titles. Use this for questions about course structure, syllabus, or lesson listings.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "course_name": {
+                        "type": "string",
+                        "description": "Course title to look up (partial matches work, e.g. 'MCP', 'Introduction')"
+                    }
+                },
+                "required": ["course_name"]
+            }
+        }
+
+    def execute(self, course_name: str) -> str:
+        """
+        Execute the outline tool to retrieve course structure.
+
+        Args:
+            course_name: Course title (fuzzy matched)
+
+        Returns:
+            Formatted course outline or error message
+        """
+        import json
+
+        # Resolve fuzzy course name to exact title
+        resolved_title = self.store._resolve_course_name(course_name)
+        if not resolved_title:
+            return f"No course found matching '{course_name}'."
+
+        # Fetch course metadata from catalog
+        try:
+            results = self.store.course_catalog.get(ids=[resolved_title])
+            if not results or not results['metadatas'] or not results['metadatas'][0]:
+                return f"No metadata found for course '{resolved_title}'."
+
+            metadata = results['metadatas'][0]
+            course_title = metadata.get('title', resolved_title)
+            course_link = metadata.get('course_link', 'N/A')
+            lessons_json = metadata.get('lessons_json', '[]')
+            lessons = json.loads(lessons_json)
+
+            # Format the outline
+            lines = [
+                f"Course: {course_title}",
+                f"Course Link: {course_link}",
+                f"Total Lessons: {len(lessons)}",
+                "",
+                "Lessons:"
+            ]
+            for lesson in sorted(lessons, key=lambda l: l.get('lesson_number', 0)):
+                lesson_num = lesson.get('lesson_number', '?')
+                lesson_title = lesson.get('lesson_title', 'Untitled')
+                lines.append(f"  Lesson {lesson_num}: {lesson_title}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            return f"Error retrieving course outline: {str(e)}"
+
 
 class ToolManager:
     """Manages available tools for the AI"""

@@ -9,6 +9,7 @@ RAG (Retrieval-Augmented Generation) chatbot for querying educational course mat
 ## Important Rules
 
 - Always use `uv` to run the server and manage dependencies. Never use `pip`.
+- Before running any shell command that uses `uv`, prepend: `export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"`
 
 ## Commands
 
