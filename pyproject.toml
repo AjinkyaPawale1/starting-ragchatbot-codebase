@@ -1,5 +1,5 @@
 [project]
-name = "starting-codebase"
+name = "rag_chatbot"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -17,4 +17,12 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short"
