@@ -77,9 +77,14 @@ body {
   padding: 0;
 }
 
-/* Header - Hidden */
+/* Header */
 header {
-  display: none;
+  display: block;
+  padding: 1rem 1.5rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+  flex-shrink: 0;
 }
 
 header h1 {
